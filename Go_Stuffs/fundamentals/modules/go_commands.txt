@@ -1,0 +1,6 @@
+go list -m all
+go list
+go list -m -versions rsc.io/sampler
+go list -m rsc.io/q...
+
+go get rsc.io/sampler@v1.3.1

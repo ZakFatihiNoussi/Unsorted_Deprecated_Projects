@@ -1,0 +1,270 @@
+Web App basics:
+-A handler is like a controller, responsible for executing your application logic and for writing HTTP response headers and bodies.
+-A router(servermux) stores mapping between the URL patterns for your application and the corresponding handlers. We usually have one sermux for your application containing all your routes.
+-A web server. We can establish a web server and listen for incoming requests as part of the application itself. No need for external 3rd party server like Nginx or Apache.
+
+Note 1: The home handler function is just a regular Go function with two parameters. The `http.ResponseWriter` parameter provides methods for assembling a HTTP response and sending it to the user, and the `*http.Request` parameter is a pointer to a struct which holds infos about the current request(like the HTTP method and the URL being requested)
+
+Important 1: Go's servemux treats the URL pattern "/" like a catch-all.
+
+The TCP network address that you pass to http.ListenAndServe() should be in the format "host:port".
+In other Go projects/docs we might sometimes see network addresses written using named ports like ":http" or ":http-alt" instead of a number, Go attempt to look up the relevant port number from our /etc/services file when starting the server, or will return an error if a match can't be found.
+
+To use Go projects in developement phase we can use the following commands:
+go run .    go run main.go  go run snippetbox.zak.net
+it creates an executable binary in your /tmp dir, then runs this binary in one step
+
+Fixed path and subtree patterns:
+Go's servemux supports two different types of URL patterns: Fixed paths, and subtree paths.
+Fixed paths don't end with a trailing slash, whereas subtree paths do end with a trailing slash.
+"/snippet/view" and "/snippet/create" are fixed paths. in Go's servemux, fixed paths patterns like these are only matched(and the corresponding handler called) when the request URL path exactly matches the fixed path.
+"/" is an example of a subtree path(because it ends in a trailing slash). Another example would be something like "/static/". Subtree path patterns are matched(and the corresponding handler called) whenever the start of a request URL path matches the subtree path. We can think of subtree paths as acting a bit like they have a wildcard at the end. like "/**" or "/static/**"
+This explains why "/" pattern is acting like a catch-all. it means match a single slash, followed by anything or nothing.
+
+Restricting the root url pattern:
+We can include a simple check in the `home` handler which ultimately has the same effect:
+
+DefaultServeMux:
+http.HandleFunc("/", home) -> do not use because DefaultServeMux is a global variable, any package can access it and register a route.
+use x := http.DefaultServeMux(), then mux.HandleFunc("/home", home)
+
+Servemux features and quirks:
+-Go's servemux, longer URL patterns always take precedence over shorter ones. So if a servemux contains multiple patterns which match a request, it will always dispatch the request to the handler corresponding to the longest pattern.
+It has the nice side-effect that you can register patterns in any order and it won't change how the servemux behaves.
+
+-Request URL paths are automatically sanitized. If the request path contains any . or .. elements or repeated slashes, the user will automatically be redirected to an equivalent clean URL. For example, if a user makes a request to /foo/bar/..//baz they will automatically be sent a `301 Permanent Redirect` to `/foo/baz` instead.
+
+-If a subtree path has been registered and a request is received for that subtree path without a trailing slash, then the user will automatically be sent `301 Permanent Redirect` to the subtree path with the slash added. For example: if you have registered the subtree path `/foo/`, then any request to `/foo` will be redirected to `/foo/`.
+
+Host name matching:
+We can include host names in our URL patterns. Which can be useful when we want to redirect all HTTP requests to a canonical URL, or if our application is acting as the back end for multiple sites or services
+for example: """
+mux := http.NewServeMux()
+mux.HandleFunc("foo.example.org/", fooHandler)
+mux.HandleFunc("bar.example.org/", barHandler)
+mux.HandleFunc("/baz", bazHandler)
+when it comes to pattern matching, any host-specific patterns will be checked first and if there is a match the request will be dispatched to the corresponding handler.
+Only when the isn't a host-specific match found will the non-host specific patterns also be checked.
+
+RESTful routing:
+Go's servermux doesn't support routing based on the request method, it doesn't support clean URLs with variables in them, and it doesn't support regexp-based patterns.
+We'll for 3rd party routers instead of Go's servemux.
+
+Customizing HTTP headers:
++--------+----------------+--------------+---------------------------+
+| Method | Pattern        | Handler      | Action                    |
++--------+----------------+--------------+---------------------------+
+| ANY    | /              | home         | Display the home page     |
+| ANY    | /snippet/view  | snippetView  | Display a specific snippet|
+| POST   | /snippet/create| snippetCreate| Create a new snippet      |
++--------+----------------+--------------+---------------------------+
+
+after changing the create function to only accept POST requests, some nuances must be considered:
+- It's only possible to call w.WriteHeader() once per response, and after the status code has been written it can't be changed. If you try to call w.WriteHeader() a second time Go will log a warning message.
+- If you don't call w.WriteHeader() explicitly, then the first call to w.Write() will automatically send a 200 OK status code to the user. So, if you want to send a non-200 status code, you must call  w.WriteHeader() before any call to w.Write().
+
+Customizing headers:
+We can include an `Allow` header with the "405 Method Not Allowed" response to let the user know which request methods are supported for that particular URL.
+We can do this by using the w.Header().Set() method to add a new header to the response header map.
+- Important 2: Changing the response header map after a call to w.WriteHeader() or w.Write() will no effect on the headers that the user receives. You need to make sure that your response header map contains all the headers you want before you call these methods.
+
+Additional Infos:
+System-generated headers and content sniffing:
+When sending a response, Go will automatically set 3 system-generated headers:`Date`, `Content-Length`, and `Content-Type`.
+Go will attempt to set the correct `Content-Type` by content sniffing the response body with the http.DetectContentType() function. if this function can't guess the content type, Go wil fall back to setting the header `Content-Type: application/octet-stream` instead.
+The `http.DetectContentType()` can be confusing when since GO can't distinguish JSON from plain text, by default, JSON responses will be sent with a `Content-Type: text/plain; charset = utf-8` header. We can prevent this from happening by setting the correct header manually:
+`w.Header().Set("Content-Type", "application/json")`
+`w.Write([]byte('{"name":"Zak"}'))`
+
+Manipulating the header map:
+We used w.Header().Set() to add a new header to the response header map. There's also Add(), Del(), Get(), and Values() methods that we can use to read and manipulate header map too:
+"""
+// Set a new cache-control header. If an existing "Cache-Control" header exists
+// it will be overwritten.
+w.Header().Set("Cache-Control", "public, max-age=31536000")
+// In contrast, the Add() method appends a new "Cache-Control" header and can
+// be called multiple times.
+w.Header().Add("Cache-Control", "public")
+w.Header().Add("Cache-Control", "max-age=31536000")
+// Delete all values for the "Cache-Control" header.
+w.Header().Del("Cache-Control")
+// Retrieve the first value for the "Cache-Control" header.
+w.Header().Get("Cache-Control")
+// Retrieve a slice of all values for the "Cache-Control" header.
+w.Header().Values("Cache-Control")
+"""
+
+Head Canonicalization:
+when using the above methods on header map, the header name will always be canonicalized using the `textproto.CanonicalMIMEHeaderKey()` function. This convert the first letter and anyletter following a hyphen to Upper Case, and the rest of the letters to lowercase, Which has the practical implication that when calling these methods the header name is case-insensitive.
+When needing to avoid canonicalization behaviour we can edit the underlying header map directly(it has the type map[string][]string):
+`w.Header()["X-XSS-Protection"] = []string["1: mode=block"]`
+
+Note 2: if a HTTP/2 connection is being used, Go will always automatically convert the header names and values to lowercase for you as per the HTTP/2 specifications.
+
+Supressing system-generated headers:
+The `Del()` method doesn't remove system-generated headers. To suppress these, we need to access the underlying header map directly and set the value to `nil`. If we want to suppress the `Date` header, for example, we write:
+w.Header()["Date"] = nil
+
+-URL query strings:
++--------+----------------------+--------------+-------------------------------+
+| Method | Pattern              | Handler      | Action                        |
++--------+----------------------+--------------+-------------------------------+
+| ANY    | /                    | home         | Display the home page         |
+| ANY    | /snippet/view?id=1   | snippetView  | Display a specific snippet    |
+| POST   | /snippet/create      | snippetCreate| Create a new snippet          |
++--------+----------------------+--------------+-------------------------------+
+
+We use the id parameter to select a specific snippet from a database and show it to the user.
+For now we'll just read the value of the id parameter and interpolate it with a placeholder response.
+We update the snippetView handler function to do 2 things:
+1-It needs to retrieve the value of the `id` parameter from the URL query string, which we can do using the r.URL.Query().Get() method. This will always return a string value for a parameter, or the empty string "" if no matching parameter exists.
+2-Because the id parameter is untrusted user input, we should validate it to make sure it's sane and sensible. We want to check that it contains a positive integer value. We try to convert the string value to an integer with `strconv.Atoi()`, then checking the value is greater than zero.
+
+The io.writer interface:
+fmt.Fprintf(w io.Writer, format string, a ...any)(n int, err error)
+But we passed it our http.ResponseWriter object instead, and worked fine.
+We can do this because the io.Writer type is an nterface, and http.ResponseWriter object "satisfies the interface" because it has a w.Write() method.
+Overall, anywhere you see io.Writer parameter it's OK to pass in your http.ResponseWriter object, whatever is being written will subsequently be sent as the body of the HTTP response.
+
+-Project Structure and Organization:
+->Don't over-complicate things. Only try hard to add structure and complexity owhen it's demonstrably needed.
+
+-The `cmd` dir wil contain the `application-specific` code for the executable applications in the project. for now we'll have just one executable application "The Web Application" which will live under the cmd/web dir.
+-The `internal` dir will contain the ancillary `non-application-specific` code used in the project. We'll use it to hold potentially reusable code like validation helpers and the SQL database models for the project.
+-The `ui` dir will contain the `user-interface assets` used by the web application. Specifically, the `ui/html` dir will contain HTML templates, and the `ui/static` dir will contain static files(like CSS and images)
+This has 2 advantages:
+1- It gives a clean separation between Go and non-Go assets. All the Go code we write will live exclusively under the `cmd` and `internal` dir, leaving the project root free to hold non-Go assets like UI files, makefiles and module definitions(including our go.mod). This can make things easier to manage when it comes to building and deploying our application in the future.
+2- It scales really nicely if you want to add another executable application to your project. For example, we might want to add a CLI to automate some administrative tasks in the future. With this structure, we could create this CLI app under `cmd/cli` and it will be able to import and reuse all the code you've written under the `internal` dir.
+
+Additional information: Theinternal directory
+It's important to point out that the firectory nae `internal` carries a special meaning and behavior in Go: any packages which live under this directory can only be imported by code |inside theparent of the `internal` directory|. In our case, thismeans thatany packages which live in `internal` can only beimported by codeinside our `snippetbox` project dir.
+Or, looking at it the other way, this means that any packages under `internal` |cannot be imported by code outside of your project|
+This is useful beause it prevents other codebases from importing and relying on the packages in our `internal` dir, even if the project code is publicly available somewhere like GitHub.
+
+- HTML Templating and Inheritance:
+We start creating a template file at `ui/html/pages/home.tmpl` which contain HTML content for our home page.
+Note 3: the `.tmpl` extension doesn't convey any special meaning or behavior here. I've only chosen this extension because it's a nice way of making it clear that the file contains a Go template when you're browsing a list of files. We can always use .html extension, or use a 'double extension' like `.tmpl.html`.
+Next we need to use Go's `html/template` package, which provides a family of functions for safely parsing and rendering HTML templates. We can use the funcions in the package to parse the template file and then execute the template.
+
+Template composition:
+As we add more pages to this web application there will be some shared, boulerplate, HTML markup that we want to include on every page, like the header, navigation, and metadata inside the <head> HTML element.
+So it's a good idea to create a base(or master) template which contains this shared content, which we can then compose with the page-specific markup for the individual pages. We'll create a new ui/html/base.tmpl file
+
+We use the {{define "base"}}...{{end}} action to define a distinct named template called `base`, which contain the content we want to appear on every page.
+Here we're use the {{template "title" .}} and {{template "main" .}} actions to denote that we want to inove other named templates(caled `title` and `main`) at a particular point in the HTML.
+Note 4: the dot at the end of the {{template "title" .}} action represent any dynamic data that you want to pass to the invoked template.
+
+So now, instead of containing HTML directly, our template set contains 3 named templates, base, title, and main. We use `ExecuteTemplate()` method to tell Go that we specifically want to respond using the content of the `base` template(which in turn invokes our `title` and `main` template)
+
+Embedding partials:
+We might want to break out certain bits of HTML into partials that can be reused in different pages or layouts.
+
+Additional informations:
+-The block action:
+We used {{template}} action to invoke onetemplate from another.
+But Go also provides a {{block}} ... {{end}} action which you can use instead. This acts like the {{template}} action, except it allows you to speciy some default content if the template being invoked `doesn't exist in the current template set`.
+In the context of a web application, this is useful when you want to provide some default content(such as sidebar) which individual pages can override on a case-by-case basis if they need to.
+Syntactically you use it like this:
+{{define "base"}}
+    <h1>An example template</h1>
+    {{block "sidebar" .}}
+        <p>My default sidebar content</p>
+    {{end}}
+{{end}}
+But if you want, you don't need to include any default content between the {{block}} and {{end}} actions. In that case, the invoked template acts like it's 'optional'. If the template exist in the template set, then it will be rendered. But if it doesn't , then nothing will be displayed.
+-Embedding files:
+Go also provides the `embed` package which makes it possible to 'embed files into our Go program itself rather than reading them from disk'.
+
+-SERVING STATIC FILES:
+The http.Fileserver handler:
+Go's `net/http` package ships with a built-in http.FileServer handler which you can use to serve files over HTTP from a specific directory. Let's add a new route to our applicatoin so that all requests which begin with "/static/" are handled using this:
+
+| Method | Pattern                   | Handler        | Action                    |
+|--------|---------------------------|----------------|---------------------------|
+| ANY    | /                         | home           | Display the home page     |
+| ANY    | /snippet/view?id=1        | snippetView    | Display a specific snippet|
+| POST   | /snippet/create           | snippetCreate  | Create a new snippet      |
+| ANY    | /static/                  | http.FileServer| Serve a specific static file |
+
+Remember, The pattern "/static/" is a subtree path pattern, so it acts a bit like there is a wildcard at the end.
+When creating http.FileServer handler, we use the `http.FileServer()` function like this:
+fileServer := http.FileServer(http.Dir("./ui/static/"))
+When this handler receives a request, it will remove the leading slash from the URL path and then search the `./ui/static` for the corresponding file to send to the user.
+So, for this to work correctly, we must strip the leading "/static" from the URL path 'before' passing it to `http.FileServer'. Otherwise it will be looking for a file which doesn't exist and the user will receive a '404 page not found' response. Fortunately, Go includes a `http.StripPrefix()' helper specifically fot this task.
+
+Using the static files:
+With the file server working properly, we can now update the ui/html/base.tmpl file to make use of the static files.
+
+Additional Information:
+- Features and functions:
+Go's file server has a few really nice features that are worth mentioning:
+-> It sanitizes all request paths by running them through the `path.Clean()` function before searching for a file. this removes any . and .. elements from the URL path, which helps to stop directory traversal attacks. This feature is particularly useful if you're using the fileserver in conjuction with a router that doesn't automatically sanitize URL paths.
+-> Range requests are fully supported. This is greate if your application is serving large files and you want to support resumable downloads. You can see this functionality in action if you use curl to request bytes 100-199 of the 'logo.png' file like so:
+curl -i -H "Range: bytes=100-199" --output - http://localhost:4000/static/img/logo.png
+-> To reduce latency and processing overhead for both the client and server, the 'Last-Modified' and 'If-Modified-Since' headers are transparently supported. If a file hasn't changed since the user last requested it, then `http.FileServer` will send a '304 Not Modified' status code instead of the file itself.
+-> The 'Content-Type' is automatically set from the file extension using the `mime.TypeByExtension()` function. You can add your own custom extensions and content types using the `mime.AddExtensionType()` function if necessary.
+
+-Performance:
+In our previous code, we've set up our file server so that it serves files out of the './ui/static' dir on our hard disk.
+But it's important to note that, once the application is up-and-running, `http.FileServer` probably won't be reading these files from disk. Both Windows and Unix-based OS cache recently-used in RAM. so(for frequently-served files at least) it's likely that `http.FileServer` will be serving them from RAM rather than making the relatively slow round-trip to your hard disk.
+
+-Serving single files:
+Sometimes you might want to server a single file from within a handler. For this there's the `http.ServeFile()` function, which we can use like so:
+func downloadHandler(w http.ResponseWriter, r *http.Request) {
+    http.ServerFile(w, r, *./ui/static/file.zip)
+}
+WARNING 1: `http.ServeFile()` does not automatically sanitize the file path. If you're constructing a file path from untrusted user input, to avoid directory traversal attacks you must sanitize the input with filepath.Clean() before using it.
+
+Disabling directory listings:
+If we want to disable directory listings there are a few differernt approaches we can take:
+The simplest way is to add a blank 'index.html' file to the specific directory that we want to disable listings for. This will then be served instead of the directory listing, and the user will get a 200 OK response with no body. If you want to do this for all directories under './ui/static' we can use the command:
+$ find ./ui/static -type d -exec touch {}/index.html \;
+A more complicated(but arguably better) solution is to create a custom implementation of `http.FileSystem`, and have it return an `os.ErrNotExist` error for any dirs.  
+
+THE `http.Handler` INTERFACE:
+What we mean by handler is "an object which satifies the `http.Handler` interface":
+type Handler interface {
+    ServeHTTP(ResponseWriter, *Request)
+}
+So in its simple terms, this basically means that to be a handler, an object must have a `ServeHTTP()` method with the exact signature: ServerHTTP(http.ResponseWriter, *http.Request)
+So in its simplest form a handler look something like this:
+type home struct {}
+func (h *home) ServeHTTP(w http.ResponseWriter, r * http.Request){
+    w.Write([]byte("This is my home page"))
+}
+Here we have an object(in this case it's a 'home' struct, but it could equally be a string or function or anything else), and we've implemented a method with the signature `ServeHTTP(http.ResponseWriter, *http.Request)` on it. Tha't all we need to make a handler.
+We could then register this with a servemux using the`Handle` method like so:
+mux := http.NewServerMux()
+mux.Handle("/", &home{})
+When this servemux receives a HTTP request for "/", it will then call the ServerHTTP() method of the `home` struct, which in turn writes the HTTP response.
+
+Handler Functions:
+Now, creating an object just so we can implement a `ServeHTTP()` method on it is long-winded and a bit confusing. Which is why in practice it's far more common to write your handlers as a normal function(like we have been so far). For example:
+func home(w http.ResponseWriter, r *http.Request){
+    w.Write([]byte("This is my home page"))
+}
+But this `home` function is just a notmal function; it doesn't have a `ServeHTTP()` method. So in itself it "isn't a handler".
+Instead we can transform it into a handler using the `http.HandlerFunc()` adapter, like so:
+mux := http.NewServeMux()
+mux.Handle("/", http.HandlerFunc(home))
+
+The `http.HandlerFunc()` adapter works by automatically adding a `ServeHTTP()` method to the `home` function. When executed, this`ServeHTTP()` method then simply "calls the content of the original `home` function". it's a roundabout but convenient way of coercing a normal function into satisfying the `http.Handler` interface.
+Throughout this project so far we've been using the `HandleFunc()` method to register our handler function with the servemux. This is just some syntactic sugar that transform a function to a handler andregisters it in one step, instaed of having to do it manually. The code above is functioanlity equivalent to this:
+mux := http.NewServeMux()
+mux.HandleFunc("/", home)
+
+Chaining Handlers:
+The `http.ListenAndServe()` function takes a `http.Handler` object as the second parameter:
+funct ListenAndServe(addr string, handler Handler) error
+... but we've been passing in a servemux.
+We were able to do this because the servemux also has a ServeHTTP() method, meaning that it too satisfies the `http.Handler` interface.
+For us it simplifies things to think of the servemux as just being a 'special kind of handler', which instead of providing a response itself passes the request on to a second handler. This isn't as much of a leap as it might first sound.
+Chaining handlers together is a very common idiom in Go, and something that we'll do a lot of later in this project.
+In fact, what exactly is happening is this: When our server receives a new HTTP request, it calls the servemux's `ServeHTTP()` method. This looks up the relevant handler based on the request URL path, and in turn calls that handler's `ServeHTTP()` method. You can think of a Go web app as a "chain of `ServeHTTP()` methods being called one after another".
+
+Requests Are Handled Concurrently:
+There is one more thing that's really important to point out: "All incoming HTTP requests are served in their own goroutine."
+For busy servers, this means it's very likely that the code in or called by your handlers will be running concurrently. While this helps make Go blazingly fast, the downside is that you need to be aware of and protect against RACE CONDITIONS when accessing shared resources from your handlers.
+
+Configuration and Error Handling:
+

@@ -1,0 +1,29 @@
+Common operation that arise when developing Go code with modules:
+-Creating a new module
+-Adding a dependency
+-Upgrading dependencies
+-Adding a dependency on a new major version
+-Upgrading a dependency to a new major version
+-Removing unused dependencies
+
+A module is a collection of Go Packages stored in a file tree with a go.mod file at its root. It defines module's module path(import path for root dir), and its dependency requirements(other modules needed for a successful build.). each dependency requirement is written as a module path and a specific semantic version.
+
+The go.mod file only appears in the root of the module. Packages in subdirs have import paths consisting of the module path plus the path to the subdir.
+For example: if we created a subdir `world`, we would not need to(nor want to) run `go mod init` there. The package would automatically recognized as part of the `example.com/hello` module, with import path `example.com/hello/world`.
+
+=Managing dependencies=
+= Workflow for using and managing dependencies:
+1-Locate useful packages on pkg.go.dev
+2-Import the packages you want
+3-Add the code to a module for dependency tracking(if it isn't in a module already).
+4-Add external packages as dependencies so you can manage them.
+5-Upgrade or downgrade dependency versions as needed over time.
+
+The //indirect comment indicates a dependency is not used directly by this module, only indirectly by other module dependencies.(see `go help modules`)
+
+when using two dependencies of the same type but with different versions, we use renamed import such as:
+import (
+"rsc.io/quote"
+quoteV3 "rsc.io/quote/v3"
+)
+and when using one after upgrading, delete the renamed import alias.
